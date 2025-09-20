@@ -70,85 +70,60 @@ const GoogleMap = ({
     }
   }
 
-  const loadPlaces = useCallback(async (center: { lat: number; lng: number }, radius: number = 10000) => {
-    if (!map || !(window as any).google) return
-
-    setIsLoading(true)
+  // Use PlacesService to get nearby places ONCE using initial userLocation
+  const loadPlaces = useCallback((center: { lat: number; lng: number }, radius: number = 10000) => {
+    if (!map || !(window as any).google) return;
+    setIsLoading(true);
     try {
-      const includedTypes = ['tourist_attraction','lodging','restaurant','cafe','amusement_park','museum','park']
-      const body = {
-        includedTypes,
-        maxResultCount: 35,
-        locationRestriction: {
-          circle: {
-            center: { latitude: center.lat, longitude: center.lng },
-            radius: radius
-          }
+      const service = new (window as any).google.maps.places.PlacesService(map);
+      const request = {
+        location: new (window as any).google.maps.LatLng(center.lat, center.lng),
+        radius,
+        type: [
+          'tourist_attraction','lodging','restaurant','cafe','amusement_park','museum','park'
+        ]
+      };
+      service.nearbySearch(request, (results: any[], status: string) => {
+        if (status === (window as any).google.maps.places.PlacesServiceStatus.OK && results) {
+          const allPlaces = results.map((p: any) => ({
+            place_id: p.place_id,
+            name: p.name,
+            vicinity: p.vicinity,
+            rating: p.rating || 0,
+            user_ratings_total: p.user_ratings_total || 0,
+            types: p.types || [],
+            opening_hours: p.opening_hours,
+            price_level: p.price_level,
+            geometry: { location: p.geometry.location },
+            photos: (p.photos || []).map((ph: any) => ({
+              getUrl: (opts: any) => ph.getUrl(opts)
+            }))
+          }));
+          // Only create heatmap data, no markers
+          const heatmapPoints = allPlaces.map(place => {
+            const heatmapColor = getHeatmapColor(place);
+            return {
+              location: place.geometry.location,
+              weight: heatmapColor.weight
+            };
+          });
+          setHeatmapData(heatmapPoints);
+          onPlacesUpdate(allPlaces);
         }
-      }
-
-      const fieldMask = [
-        'places.id','places.displayName','places.formattedAddress','places.location','places.types',
-        'places.rating','places.userRatingCount','places.currentOpeningHours.openNow','places.priceLevel','places.photos'
-      ].join(',')
-
-      const resp = await fetch('https://places.googleapis.com/v1/places:searchNearby', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Goog-Api-Key': GOOGLE_API_KEY,
-          'X-Goog-FieldMask': fieldMask,
-        },
-        body: JSON.stringify(body)
-      })
-
-      const json = await resp.json()
-      const placesResp = (json.places || []) as any[]
-
-      const normalize = (p: any) => {
-        return {
-          place_id: p.id,
-          name: p.displayName?.text || '',
-          vicinity: p.formattedAddress || '',
-          rating: p.rating || 0,
-          user_ratings_total: p.userRatingCount || 0,
-          types: p.types || [],
-          opening_hours: { open_now: p.currentOpeningHours?.openNow ?? undefined },
-          price_level: p.priceLevel,
-          geometry: {
-            location: new (window as any).google.maps.LatLng(p.location?.latitude, p.location?.longitude)
-          },
-          photos: (p.photos || []).map((ph: any) => ({
-            name: ph.name,
-            getUrl: ({ maxWidth, maxHeight }: any) => `https://places.googleapis.com/v1/${ph.name}/media?key=${GOOGLE_API_KEY}${maxWidth ? `&maxWidthPx=${maxWidth}` : ''}${maxHeight ? `&maxHeightPx=${maxHeight}` : ''}`
-          }))
-        }
-      }
-
-      const allPlaces = placesResp.map(normalize)
-
-      // Only create heatmap data, no markers
-      const heatmapPoints = allPlaces.map(place => {
-        const heatmapColor = getHeatmapColor(place)
-        return {
-          location: place.geometry.location,
-          weight: heatmapColor.weight
-        }
-      })
-      setHeatmapData(heatmapPoints)
-      onPlacesUpdate(allPlaces)
+        setIsLoading(false);
+      });
     } catch (error) {
-      console.error('Error loading places:', error)
-    } finally {
-      setIsLoading(false)
+      console.error('Error loading places:', error);
+      setIsLoading(false);
     }
-  }, [map, markers])
+  }, [map]);
 
   useEffect(() => {
+    let initialLocation = userLocation || { lat: 12.9716, lng: 77.5946 };
     const initMap = () => {
       if (typeof window !== "undefined" && (window as any).google && mapRef.current) {
         const mapInstance = new (window as any).google.maps.Map(mapRef.current, {
-          center: userLocation || { lat: 12.9716, lng: 77.5946 },
+          center: initialLocation,
           zoom: 12,
           styles: [
             {
@@ -157,39 +132,25 @@ const GoogleMap = ({
               stylers: [{ color: "#3b82f6" }],
             },
           ],
-        })
-
-        setMap(mapInstance)
-
-        // Load initial places
-        loadPlaces(userLocation || { lat: 12.9716, lng: 77.5946 })
-
-        // Add zoom listener to reload places
-        mapInstance.addListener('zoom_changed', () => {
-          const zoom = mapInstance.getZoom()
-          const radius = zoom > 15 ? 2000 : zoom > 12 ? 5000 : 10000
-          loadPlaces(mapInstance.getCenter().toJSON(), radius)
-        })
-
-        // Add drag listener to reload places
-        mapInstance.addListener('dragend', () => {
-          loadPlaces(mapInstance.getCenter().toJSON())
-        })
+        });
+        setMap(mapInstance);
+        // Only load places ONCE at initial location
+        loadPlaces(initialLocation);
       }
-    }
-
+    };
     // Load Google Maps API
     if (!(window as any).google) {
-      const script = document.createElement("script")
-      script.src = `https://maps.googleapis.com/maps/api/js?key=AIzaSyA0Zd7rDC2d0JlmkDdd3V_6Hp53PfkbeV4&libraries=places,geometry,visualization&callback=initMap`
-      script.async = true
-      script.defer = true
-      ;(window as any).initMap = initMap
-      document.head.appendChild(script)
+      const script = document.createElement("script");
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_API_KEY}&libraries=places,geometry,visualization&callback=initMap`;
+      script.async = true;
+      script.defer = true;
+      (window as any).initMap = initMap;
+      document.head.appendChild(script);
     } else {
-      initMap()
+      initMap();
     }
-  }, [userLocation, loadPlaces])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userLocation]);
 
   // Add or update heatmap layer when heatmapData or map changes
   useEffect(() => {
@@ -219,55 +180,9 @@ const GoogleMap = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [heatmapData, map]);
 
-  // Recenter when a fresh user location arrives
-  useEffect(() => {
-    if (map && userLocation) {
-      const center = new (window as any).google.maps.LatLng(userLocation.lat, userLocation.lng)
-      map.setCenter(center)
-      map.setZoom(14)
-      loadPlaces(userLocation, 5000)
-    }
-  }, [map, userLocation, loadPlaces])
+  // Remove live recentering and reloads for places; only use initial location
 
-  // Handle search via Places API (New)
-  useEffect(() => {
-    const run = async () => {
-      if (!searchQuery || !map) return
-      try {
-        const fieldMask = [
-          'places.id','places.displayName','places.formattedAddress','places.location','places.types',
-          'places.rating','places.userRatingCount','places.currentOpeningHours.openNow','places.priceLevel','places.photos'
-        ].join(',')
-        const resp = await fetch('https://places.googleapis.com/v1/places:searchText', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Goog-Api-Key': GOOGLE_API_KEY,
-            'X-Goog-FieldMask': fieldMask,
-          },
-          body: JSON.stringify({
-            textQuery: searchQuery,
-            locationBias: userLocation ? { circle: { center: { latitude: userLocation.lat, longitude: userLocation.lng }, radius: 10000 } } : undefined,
-          })
-        })
-        const json = await resp.json()
-        const results = (json.places || []) as any[]
-        if (results.length > 0) {
-          const first = results[0]
-          const lat = first.location?.latitude
-          const lng = first.location?.longitude
-          if (lat && lng) {
-            map.setCenter(new (window as any).google.maps.LatLng(lat, lng))
-            map.setZoom(15)
-            await loadPlaces({ lat, lng }, 2000)
-          }
-        }
-      } catch (e) {
-        console.error('searchText error', e)
-      }
-    }
-    run()
-  }, [searchQuery, map, userLocation, loadPlaces])
+  // Remove REST searchText; optionally, you can implement PlacesService.textSearch here if needed
 
   // Defensive render with error boundary
   if (error) {
