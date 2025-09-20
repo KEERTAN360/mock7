@@ -37,6 +37,7 @@ import {
 // If you have a GoogleMap component, import it. Otherwise, comment out or implement as needed.
 // import GoogleMap from "@/components/google-map";
 
+export default function TouristSpotsPage() {
   const PLACE_TYPES = [
     "tourist_attraction",
     "lodging",
@@ -792,11 +793,13 @@ import {
 
       <div className="flex-1 px-4 pb-20">
         <Card className="placard-3d rounded-2xl overflow-hidden shadow-lg mb-4 h-48 relative cursor-pointer bg-card border border-border">
+          {/*
           <GoogleMap 
             searchQuery={searchQuery}
             userLocation={userLocation}
             onPlacesUpdate={handlePlacesUpdate}
           />
+          */}
           <div className="absolute top-4 left-4 bg-background/95 backdrop-blur-sm rounded-lg px-3 py-2 shadow-md border border-border">
             <div className="flex items-center gap-2">
               <MapPin className="h-4 w-4 text-primary" />
@@ -996,6 +999,5 @@ import {
       <BottomNavigation />
     </div>
   )
-  }
 
 
