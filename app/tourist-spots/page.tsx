@@ -1,218 +1,108 @@
 
+
 "use client"
 
+import React, { useEffect, useRef, useState, useCallback } from "react";
+import { useRouter } from "next/navigation";
+import { LocationService } from "@/lib/location-service";
+import BottomNavigation from "@/components/bottom-navigation";
+import LikeButton from "@/components/like-button";
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+
 import {
-  Search,
+  AlertTriangle,
+  Bookmark,
+  Shield,
   Menu,
   MapPin,
-  AlertTriangle,
-  Star,
-  UtensilsCrossed,
-  Compass,
-  Coffee,
-  Hotel,
-  Calendar,
-  Activity,
-  Bookmark,
-  AlertCircle,
+  LocateFixed,
+  Loader2,
+  Search,
+  X,
+  Zap,
   Users,
   TrendingUp,
   Eye,
-  Zap,
-  Shield,
-  Loader2,
-  X,
-  LocateFixed,
-} from "lucide-react"
-import { Card } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Button } from "@/components/ui/button"
-import { useRouter } from "next/navigation"
-import { useEffect, useState, useRef, useCallback } from "react"
-import BottomNavigation from "@/components/bottom-navigation"
-import LikeButton from "@/components/like-button"
-import { LocationService, LocationCoords } from "@/lib/location-service"
+  Hotel,
+  UtensilsCrossed,
+  Coffee,
+  Calendar,
+  Activity,
+  Compass,
+  AlertCircle,
+  Star
+} from "lucide-react";
+// If you have a GoogleMap component, import it. Otherwise, comment out or implement as needed.
+// import GoogleMap from "@/components/google-map";
 
-const GOOGLE_API_KEY = "AIzaSyA0Zd7rDC2d0JlmkDdd3V_6Hp53PfkbeV4"
+  const PLACE_TYPES = [
+    "tourist_attraction",
+    "lodging",
+    "restaurant",
+    "cafe",
+    "amusement_park",
+    "museum",
+    "park",
+  ];
 
-const GoogleMap = ({ 
-  searchQuery, 
-  userLocation, 
-  onPlacesUpdate 
-}: { 
-  searchQuery: string
-  userLocation: { lat: number; lng: number } | null
-  onPlacesUpdate: (places: any[]) => void
-}) => {
-  const [map, setMap] = useState<any>(null)
-  const [heatmapData, setHeatmapData] = useState<any[]>([])
-  const [heatmapLayer, setHeatmapLayer] = useState<any>(null)
-  const [markers, setMarkers] = useState<any[]>([])
-  const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null);
-  const mapRef = useRef<HTMLDivElement>(null)
-
-  const getHeatmapColor = (place: any) => {
-    const rating = place.rating || 0
-    const userRatingsTotal = place.user_ratings_total || 0
-    
-    // Popular tourist spots (high rating + many reviews) = Red
-    if (rating >= 4.5 && userRatingsTotal >= 1000) {
-      return { color: '#ff0000', weight: 1.0 }
-    }
-    // Lesser known tourist spots (medium rating/reviews) = Yellow
-    else if (rating >= 3.5 && userRatingsTotal >= 100) {
-      return { color: '#ffff00', weight: 0.7 }
-    }
-    // Non-tourist spots = Blue
-    else {
-      return { color: '#0000ff', weight: 0.5 }
-    }
-  }
-
-  // Use PlacesService to get nearby places ONCE using initial userLocation
-  const loadPlaces = useCallback((center: { lat: number; lng: number }, radius: number = 10000) => {
-    if (!map || !(window as any).google) return;
-    setIsLoading(true);
-    try {
-      const service = new (window as any).google.maps.places.PlacesService(map);
-      const request = {
-        location: new (window as any).google.maps.LatLng(center.lat, center.lng),
-        radius,
-        type: [
-          'tourist_attraction','lodging','restaurant','cafe','amusement_park','museum','park'
-        ]
-      };
-      service.nearbySearch(request, (results: any[], status: string) => {
-        if (status === (window as any).google.maps.places.PlacesServiceStatus.OK && results) {
-          const allPlaces = results.map((p: any) => ({
-            place_id: p.place_id,
-            name: p.name,
-            vicinity: p.vicinity,
-            rating: p.rating || 0,
-            user_ratings_total: p.user_ratings_total || 0,
-            types: p.types || [],
-            opening_hours: p.opening_hours,
-            price_level: p.price_level,
-            geometry: { location: p.geometry.location },
-            photos: (p.photos || []).map((ph: any) => ({
-              getUrl: (opts: any) => ph.getUrl(opts)
-            }))
-          }));
-          // Only create heatmap data, no markers
-          const heatmapPoints = allPlaces.map(place => {
-            const heatmapColor = getHeatmapColor(place);
-            return {
-              location: place.geometry.location,
-              weight: heatmapColor.weight
-            };
-          });
-          setHeatmapData(heatmapPoints);
-          onPlacesUpdate(allPlaces);
-        }
-        setIsLoading(false);
-      });
-    } catch (error) {
-      console.error('Error loading places:', error);
-      setIsLoading(false);
-    }
-  }, [map]);
-
-  useEffect(() => {
-    let initialLocation = userLocation || { lat: 12.9716, lng: 77.5946 };
-    const initMap = () => {
-      if (typeof window !== "undefined" && (window as any).google && mapRef.current) {
-        const mapInstance = new (window as any).google.maps.Map(mapRef.current, {
-          center: initialLocation,
-          zoom: 12,
-          styles: [
-            {
-              featureType: "poi.attraction",
-              elementType: "geometry",
-              stylers: [{ color: "#3b82f6" }],
-            },
-          ],
-        });
-        setMap(mapInstance);
-        // Only load places ONCE at initial location
-        loadPlaces(initialLocation);
-      }
-    };
-    // Load Google Maps API
-    if (!(window as any).google) {
-      const script = document.createElement("script");
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_API_KEY}&libraries=places,geometry,visualization&callback=initMap`;
-      script.async = true;
-      script.defer = true;
-      (window as any).initMap = initMap;
-      document.head.appendChild(script);
-    } else {
-      initMap();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userLocation]);
-
-  // Add or update heatmap layer when heatmapData or map changes
-  useEffect(() => {
-    try {
-      if (map && (window as any).google && (window as any).google.maps && (window as any).google.maps.visualization) {
-        if (heatmapLayer) {
-          heatmapLayer.setMap(null);
-        }
-        if (heatmapData.length > 0) {
-          // Format data as array of {location: LatLng, weight: number}
-          const dataArr = heatmapData.map((point: any) => ({ location: point.location, weight: point.weight }));
-          const layer = new (window as any).google.maps.visualization.HeatmapLayer({
-            data: dataArr,
-            map: map,
-            radius: 40,
-            opacity: 0.6,
-          });
-          setHeatmapLayer(layer);
-        }
-      }
-    } catch (err) {
-      // Log error to browser console for debugging
-      if (typeof window !== 'undefined' && window.console) {
-        console.error('HeatmapLayer error:', err);
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [heatmapData, map]);
-
-  // Remove live recentering and reloads for places; only use initial location
-
-  // Remove REST searchText; optionally, you can implement PlacesService.textSearch here if needed
-
-  // Defensive render with error boundary
-  if (error) {
-    return <div className="w-full h-full flex items-center justify-center text-red-600 bg-red-50 rounded-2xl">Map error: {error}</div>;
-  }
-  try {
+  function PlaceCard({ place, onClick }: { place: any; onClick: () => void }) {
     return (
-      <div className="w-full h-full relative">
-        <div ref={mapRef} className="w-full h-full rounded-2xl"></div>
-        {/* Locate me control (non-intrusive overlay, parent handles actual permission) */}
-        <div className="absolute bottom-3 left-3">
-          <div className="bg-background/95 backdrop-blur-sm rounded-lg shadow-md border border-border px-2 py-1 text-xs flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-green-500" />
-            <span>Location-ready</span>
+      <li className="place-result" onClick={onClick} style={{ cursor: "pointer", display: "flex", padding: "0.8em", borderBottom: "1px solid #eee" }}>
+        <div className="text" style={{ flexGrow: 1 }}>
+          <div className="name" style={{ fontWeight: 500 }}>{place.name}</div>
+          <div className="info" style={{ color: "#555", fontSize: "0.9em" }}>
+            {place.rating && <span>{place.rating}★</span>}
+            {place.user_ratings_total && <span>&nbsp;({place.user_ratings_total})</span>}
+            {place.vicinity && <span>&nbsp;· {place.vicinity}</span>}
           </div>
+          <div className="info">{place.types?.[0]?.replace(/_/g, " ")}</div>
         </div>
-        {isLoading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/20 rounded-2xl">
-            <Loader2 className="h-6 w-6 animate-spin text-white" />
-          </div>
+        {place.photos && place.photos.length > 0 && (
+          <div className="photo" style={{ flex: "0 0 4em", height: "4em", marginLeft: "0.8em", background: `url(${place.photos[0].getUrl({ maxWidth: 200, maxHeight: 200 })}) center/cover`, borderRadius: "0.3em" }} />
         )}
+      </li>
+    );
+  }
+
+  function PlaceDetailsModal({ place, onClose }: { place: any; onClose: () => void }) {
+    if (!place) return null;
+    return (
+      <div style={{ position: "fixed", top: 0, left: 0, width: "100vw", height: "100vh", background: "rgba(0,0,0,0.7)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={onClose}>
+        <div style={{ background: "#fff", borderRadius: 8, padding: 24, minWidth: 320, maxWidth: 500, maxHeight: "90vh", overflowY: "auto" }} onClick={e => e.stopPropagation()}>
+          <button onClick={onClose} style={{ float: "right", background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>×</button>
+          <h2>{place.name}</h2>
+          {place.photos && place.photos.length > 0 && (
+            <img src={place.photos[0].getUrl({ maxWidth: 400, maxHeight: 400 })} alt={place.name} style={{ width: "100%", borderRadius: 8, marginBottom: 12 }} />
+          )}
+          <div style={{ marginBottom: 8 }}>{place.vicinity}</div>
+          {place.rating && <div>Rating: {place.rating} ({place.user_ratings_total})</div>}
+          {place.types && <div>Type: {place.types.map((t: string) => t.replace(/_/g, " ")).join(", ")}</div>}
+          {place.opening_hours && place.opening_hours.weekday_text && (
+            <div style={{ marginTop: 8 }}>
+              <b>Opening Hours:</b>
+              <ul>
+                {place.opening_hours.weekday_text.map((t: string, i: number) => <li key={i}>{t}</li>)}
+              </ul>
+            </div>
+          )}
+          {place.website && <div><a href={place.website} target="_blank" rel="noopener noreferrer">Website</a></div>}
+          {place.formatted_phone_number && <div>Phone: {place.formatted_phone_number}</div>}
+          {place.reviews && place.reviews.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <b>Reviews:</b>
+              <ul>
+                {place.reviews.slice(0, 3).map((r: any, i: number) => <li key={i}>{r.text} — <i>{r.author_name}</i></li>)}
+              </ul>
+            </div>
+          )}
+        </div>
       </div>
     );
-  } catch (err: any) {
-    setError(err?.message || 'Unknown error');
-    return <div className="w-full h-full flex items-center justify-center text-red-600 bg-red-50 rounded-2xl">Map crashed: {err?.message || 'Unknown error'}</div>;
   }
-}
 
-export default function TouristSpotsPage() {
+// ...existing code...
   const router = useRouter()
   const [searchQuery, setSearchQuery] = useState("")
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null)
@@ -265,11 +155,11 @@ export default function TouristSpotsPage() {
 
       try {
         const coords = await LocationService.getCurrentLocation({
-          onProgress: (attempt, strategy) => {
+          onProgress: (attempt: any, strategy: any) => {
             setLocationRetryCount(attempt)
             setLocationRetryAttempts(prev => [...prev, strategy.description])
           },
-          onSuccess: (coords) => {
+          onSuccess: (coords: any) => {
             setLocationError("")
             setUserLocation(coords)
             setLocationAccuracy(coords.accuracy || null)
@@ -281,7 +171,7 @@ export default function TouristSpotsPage() {
             // Start live location tracking
             startLiveLocationTracking()
           },
-          onError: (error, finalAttempt) => {
+          onError: (error: any, finalAttempt: any) => {
             if (finalAttempt) {
               setLocationError(LocationService.getErrorMessage(error))
             }
@@ -312,13 +202,13 @@ export default function TouristSpotsPage() {
     }
 
     const watchId = LocationService.watchLocation(
-      (coords) => {
+      (coords: any) => {
         setUserLocation(coords)
         setLocationAccuracy(coords.accuracy || null)
         setLastLocationUpdate(coords.timestamp || new Date())
         setLocationError("")
       },
-      (error) => {
+      (error: any) => {
         console.error('Live location tracking error:', error)
         setLocationError('Live location tracking failed')
       }
@@ -343,11 +233,11 @@ export default function TouristSpotsPage() {
 
     try {
       const coords = await LocationService.getCurrentLocation({
-      onProgress: (attempt, strategy) => {
+  onProgress: (attempt: any, strategy: any) => {
         setLocationRetryCount(attempt)
         setLocationRetryAttempts(prev => [...prev, strategy.description])
       },
-      onSuccess: (coords) => {
+  onSuccess: (coords: any) => {
         setLocationError("")
         setUserLocation(coords)
         setLocationAccuracy(coords.accuracy || null)
@@ -359,7 +249,7 @@ export default function TouristSpotsPage() {
         // Start live location tracking
         startLiveLocationTracking()
       },
-      onError: (error, finalAttempt) => {
+  onError: (error: any, finalAttempt: any) => {
         if (finalAttempt) {
           setLocationError(LocationService.getErrorMessage(error))
         }
@@ -417,7 +307,7 @@ export default function TouristSpotsPage() {
   const getLocationAddress = useCallback(async (lat: number, lng: number) => {
     try {
       const response = await fetch(
-        `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_API_KEY}`
+  `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${process.env.GOOGLE_MAPS_API_KEY}`
       )
       const data = await response.json()
       
@@ -500,9 +390,9 @@ export default function TouristSpotsPage() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'X-Goog-Api-Key': GOOGLE_API_KEY,
+            'X-Goog-Api-Key': process.env.GOOGLE_MAPS_API_KEY ?? '',
             'X-Goog-FieldMask': fieldMask,
-          },
+          } as HeadersInit,
           body: JSON.stringify(body)
         })
         const json = await resp.json()
@@ -518,7 +408,7 @@ export default function TouristSpotsPage() {
           geometry: { location: { lat: p.location?.latitude, lng: p.location?.longitude } },
           photos: (p.photos || []).map((ph: any) => ({
             name: ph.name,
-            getUrl: ({ maxWidth, maxHeight }: any) => `https://places.googleapis.com/v1/${ph.name}/media?key=${GOOGLE_API_KEY}${maxWidth ? `&maxWidthPx=${maxWidth}` : ''}${maxHeight ? `&maxHeightPx=${maxHeight}` : ''}`
+            getUrl: ({ maxWidth, maxHeight }: any) => `https://places.googleapis.com/v1/${ph.name}/media?key=${process.env.GOOGLE_MAPS_API_KEY}${maxWidth ? `&maxWidthPx=${maxWidth}` : ''}${maxHeight ? `&maxHeightPx=${maxHeight}` : ''}`
           }))
         })
         setNearestPlaces(placesResp.map(normalize).slice(0, 3))
@@ -1106,5 +996,6 @@ export default function TouristSpotsPage() {
       <BottomNavigation />
     </div>
   )
-}
+  }
+
 
