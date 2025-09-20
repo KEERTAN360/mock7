@@ -792,57 +792,23 @@ export default function TouristSpotsPage() {
       </div>
 
       <div className="flex-1 px-4 pb-20">
-        <Card className="placard-3d rounded-2xl overflow-hidden shadow-lg mb-4 h-48 relative cursor-pointer bg-card border border-border">
-          {/*
-          <GoogleMap 
-            searchQuery={searchQuery}
-            userLocation={userLocation}
-            onPlacesUpdate={handlePlacesUpdate}
-          />
-          */}
-          <div className="absolute top-4 left-4 bg-background/95 backdrop-blur-sm rounded-lg px-3 py-2 shadow-md border border-border">
-            <div className="flex items-center gap-2">
-              <MapPin className="h-4 w-4 text-primary" />
-              <div>
-                <p className="text-sm font-medium text-foreground">Live Tourist Map</p>
-                <p className="text-xs text-muted-foreground">
-                  {userLocation ? "Your location" : "Bangalore, India"}
-                </p>
-              </div>
-            </div>
-          </div>
-          <div className="absolute bottom-4 right-4">
-            <Button
-              onClick={requestLocation}
-              size="icon"
-              className="h-10 w-10 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 shadow-lg"
-              title="Use my location"
-            >
-              <LocateFixed className="h-5 w-5" />
-            </Button>
-          </div>
-          {locationError && (
-            <div className="absolute bottom-4 left-4 bg-destructive/90 text-destructive-foreground text-xs px-3 py-2 rounded-md shadow">
-              {locationError}
-            </div>
+        <div className="placard-3d rounded-2xl overflow-hidden shadow-lg mb-4 h-96 relative cursor-pointer bg-card border border-border">
+          {userLocation && (
+            <iframe
+              title="Google Map"
+              width="100%"
+              height="100%"
+              style={{ border: 0, minHeight: 320 }}
+              loading="lazy"
+              allowFullScreen
+              referrerPolicy="no-referrer-when-downgrade"
+              src={`https://www.google.com/maps/embed/v1/view?key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}&center=${userLocation.lat},${userLocation.lng}&zoom=14`}
+            />
           )}
-          <div className="absolute top-4 right-4 bg-background/95 backdrop-blur-sm rounded-lg px-3 py-2 shadow-md border border-border">
-            <div className="flex items-center gap-2 text-xs">
-              <div className="flex items-center gap-1">
-                <div className="w-2 h-2 rounded-full bg-red-500"></div>
-                <span>Popular</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <div className="w-2 h-2 rounded-full bg-yellow-500"></div>
-                <span>Lesser Known</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <div className="w-2 h-2 rounded-full bg-blue-500"></div>
-                <span>Other</span>
-              </div>
-            </div>
-          </div>
-        </Card>
+          {!userLocation && (
+            <div className="flex items-center justify-center h-full text-muted-foreground">Loading map...</div>
+          )}
+        </div>
 
         <div className="mb-6">
           <Button
@@ -880,17 +846,58 @@ export default function TouristSpotsPage() {
           </Card>
         </div>
 
-        <div className="grid grid-cols-4 gap-3 mb-8">
-          {categories.map((category) => (
-            <Card
-              key={category.label}
-              onClick={() => handleCategoryClick(category)}
-              className={`placard-3d relative p-4 h-28 flex flex-col items-center justify-center cursor-pointer text-white border-0 rounded-2xl shadow-lg bg-gradient-to-br ${category.color}`}
-            >
-              <category.icon className="h-10 w-10 mb-2" />
-              <span className="text-xs font-medium text-center leading-tight">{category.label}</span>
-            </Card>
-          ))}
+        {/* Dynamic placards for Stays, Restaurants, Cafes, Activities */}
+        <div className="mb-8">
+          <h2 className="text-lg font-semibold text-foreground mb-4">Stays Near You</h2>
+          <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide">
+            {places.filter(place => place.types?.includes('lodging')).slice(0, 8).map((spot, index) => (
+              <SpotCard key={spot.place_id || index} spot={spot} />
+            ))}
+            {places.filter(place => place.types?.includes('lodging')).length === 0 && (
+              <div className="flex items-center justify-center w-full h-32 text-muted-foreground">No stays found nearby.</div>
+            )}
+          </div>
+        </div>
+        <div className="mb-8">
+          <h2 className="text-lg font-semibold text-foreground mb-4">Restaurants Near You</h2>
+          <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide">
+            {places.filter(place => place.types?.includes('restaurant')).slice(0, 8).map((spot, index) => (
+              <SpotCard key={spot.place_id || index} spot={spot} />
+            ))}
+            {places.filter(place => place.types?.includes('restaurant')).length === 0 && (
+              <div className="flex items-center justify-center w-full h-32 text-muted-foreground">No restaurants found nearby.</div>
+            )}
+          </div>
+        </div>
+        <div className="mb-8">
+          <h2 className="text-lg font-semibold text-foreground mb-4">Cafes Near You</h2>
+          <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide">
+            {places.filter(place => place.types?.includes('cafe')).slice(0, 8).map((spot, index) => (
+              <SpotCard key={spot.place_id || index} spot={spot} />
+            ))}
+            {places.filter(place => place.types?.includes('cafe')).length === 0 && (
+              <div className="flex items-center justify-center w-full h-32 text-muted-foreground">No cafes found nearby.</div>
+            )}
+          </div>
+        </div>
+        <div className="mb-8">
+          <h2 className="text-lg font-semibold text-foreground mb-4">Activities Near You</h2>
+          <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide">
+            {places.filter(place =>
+              place.types?.includes('amusement_park') ||
+              place.types?.includes('museum') ||
+              place.types?.includes('park')
+            ).slice(0, 8).map((spot, index) => (
+              <SpotCard key={spot.place_id || index} spot={spot} />
+            ))}
+            {places.filter(place =>
+              place.types?.includes('amusement_park') ||
+              place.types?.includes('museum') ||
+              place.types?.includes('park')
+            ).length === 0 && (
+              <div className="flex items-center justify-center w-full h-32 text-muted-foreground">No activities found nearby.</div>
+            )}
+          </div>
         </div>
 
         <div className="mb-6">
