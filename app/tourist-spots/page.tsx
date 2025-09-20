@@ -1,0 +1,1195 @@
+
+"use client"
+
+import {
+  Search,
+  Menu,
+  MapPin,
+  AlertTriangle,
+  Star,
+  UtensilsCrossed,
+  Compass,
+  Coffee,
+  Hotel,
+  Calendar,
+  Activity,
+  Bookmark,
+  AlertCircle,
+  Users,
+  TrendingUp,
+  Eye,
+  Zap,
+  Shield,
+  Loader2,
+  X,
+  LocateFixed,
+} from "lucide-react"
+import { Card } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button"
+import { useRouter } from "next/navigation"
+import { useEffect, useState, useRef, useCallback } from "react"
+import BottomNavigation from "@/components/bottom-navigation"
+import LikeButton from "@/components/like-button"
+import { LocationService, LocationCoords } from "@/lib/location-service"
+
+const GOOGLE_API_KEY = "AIzaSyA0Zd7rDC2d0JlmkDdd3V_6Hp53PfkbeV4"
+
+const GoogleMap = ({ 
+  searchQuery, 
+  userLocation, 
+  onPlacesUpdate 
+}: { 
+  searchQuery: string
+  userLocation: { lat: number; lng: number } | null
+  onPlacesUpdate: (places: any[]) => void
+}) => {
+  const [map, setMap] = useState<any>(null)
+  const [heatmapData, setHeatmapData] = useState<any[]>([])
+  const [heatmapLayer, setHeatmapLayer] = useState<any>(null)
+  const [markers, setMarkers] = useState<any[]>([])
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null);
+  const mapRef = useRef<HTMLDivElement>(null)
+
+  const getHeatmapColor = (place: any) => {
+    const rating = place.rating || 0
+    const userRatingsTotal = place.user_ratings_total || 0
+    
+    // Popular tourist spots (high rating + many reviews) = Red
+    if (rating >= 4.5 && userRatingsTotal >= 1000) {
+      return { color: '#ff0000', weight: 1.0 }
+    }
+    // Lesser known tourist spots (medium rating/reviews) = Yellow
+    else if (rating >= 3.5 && userRatingsTotal >= 100) {
+      return { color: '#ffff00', weight: 0.7 }
+    }
+    // Non-tourist spots = Blue
+    else {
+      return { color: '#0000ff', weight: 0.5 }
+    }
+  }
+
+  const loadPlaces = useCallback(async (center: { lat: number; lng: number }, radius: number = 10000) => {
+    if (!map || !(window as any).google) return
+
+    setIsLoading(true)
+    try {
+      const includedTypes = ['tourist_attraction','lodging','restaurant','cafe','amusement_park','museum','park']
+      const body = {
+        includedTypes,
+        maxResultCount: 35,
+        locationRestriction: {
+          circle: {
+            center: { latitude: center.lat, longitude: center.lng },
+            radius: radius
+          }
+        }
+      }
+
+      const fieldMask = [
+        'places.id','places.displayName','places.formattedAddress','places.location','places.types',
+        'places.rating','places.userRatingCount','places.currentOpeningHours.openNow','places.priceLevel','places.photos'
+      ].join(',')
+
+      const resp = await fetch('https://places.googleapis.com/v1/places:searchNearby', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': GOOGLE_API_KEY,
+          'X-Goog-FieldMask': fieldMask,
+        },
+        body: JSON.stringify(body)
+      })
+
+      const json = await resp.json()
+      const placesResp = (json.places || []) as any[]
+
+      const normalize = (p: any) => {
+        return {
+          place_id: p.id,
+          name: p.displayName?.text || '',
+          vicinity: p.formattedAddress || '',
+          rating: p.rating || 0,
+          user_ratings_total: p.userRatingCount || 0,
+          types: p.types || [],
+          opening_hours: { open_now: p.currentOpeningHours?.openNow ?? undefined },
+          price_level: p.priceLevel,
+          geometry: {
+            location: new (window as any).google.maps.LatLng(p.location?.latitude, p.location?.longitude)
+          },
+          photos: (p.photos || []).map((ph: any) => ({
+            name: ph.name,
+            getUrl: ({ maxWidth, maxHeight }: any) => `https://places.googleapis.com/v1/${ph.name}/media?key=${GOOGLE_API_KEY}${maxWidth ? `&maxWidthPx=${maxWidth}` : ''}${maxHeight ? `&maxHeightPx=${maxHeight}` : ''}`
+          }))
+        }
+      }
+
+      const allPlaces = placesResp.map(normalize)
+
+      // Only create heatmap data, no markers
+      const heatmapPoints = allPlaces.map(place => {
+        const heatmapColor = getHeatmapColor(place)
+        return {
+          location: place.geometry.location,
+          weight: heatmapColor.weight
+        }
+      })
+      setHeatmapData(heatmapPoints)
+      onPlacesUpdate(allPlaces)
+    } catch (error) {
+      console.error('Error loading places:', error)
+    } finally {
+      setIsLoading(false)
+    }
+  }, [map, markers])
+
+  useEffect(() => {
+    const initMap = () => {
+      if (typeof window !== "undefined" && (window as any).google && mapRef.current) {
+        const mapInstance = new (window as any).google.maps.Map(mapRef.current, {
+          center: userLocation || { lat: 12.9716, lng: 77.5946 },
+          zoom: 12,
+          styles: [
+            {
+              featureType: "poi.attraction",
+              elementType: "geometry",
+              stylers: [{ color: "#3b82f6" }],
+            },
+          ],
+        })
+
+        setMap(mapInstance)
+
+        // Load initial places
+        loadPlaces(userLocation || { lat: 12.9716, lng: 77.5946 })
+
+        // Add zoom listener to reload places
+        mapInstance.addListener('zoom_changed', () => {
+          const zoom = mapInstance.getZoom()
+          const radius = zoom > 15 ? 2000 : zoom > 12 ? 5000 : 10000
+          loadPlaces(mapInstance.getCenter().toJSON(), radius)
+        })
+
+        // Add drag listener to reload places
+        mapInstance.addListener('dragend', () => {
+          loadPlaces(mapInstance.getCenter().toJSON())
+        })
+      }
+    }
+
+    // Load Google Maps API
+    if (!(window as any).google) {
+      const script = document.createElement("script")
+      script.src = `https://maps.googleapis.com/maps/api/js?key=AIzaSyA0Zd7rDC2d0JlmkDdd3V_6Hp53PfkbeV4&libraries=places,geometry,visualization&callback=initMap`
+      script.async = true
+      script.defer = true
+      ;(window as any).initMap = initMap
+      document.head.appendChild(script)
+    } else {
+      initMap()
+    }
+  }, [userLocation, loadPlaces])
+
+  // Add or update heatmap layer when heatmapData or map changes
+  useEffect(() => {
+    try {
+      if (map && (window as any).google && (window as any).google.maps && (window as any).google.maps.visualization) {
+        if (heatmapLayer) {
+          heatmapLayer.setMap(null);
+        }
+        if (heatmapData.length > 0) {
+          // Format data as array of {location: LatLng, weight: number}
+          const dataArr = heatmapData.map((point: any) => ({ location: point.location, weight: point.weight }));
+          const layer = new (window as any).google.maps.visualization.HeatmapLayer({
+            data: dataArr,
+            map: map,
+            radius: 40,
+            opacity: 0.6,
+          });
+          setHeatmapLayer(layer);
+        }
+      }
+    } catch (err) {
+      // Log error to browser console for debugging
+      if (typeof window !== 'undefined' && window.console) {
+        console.error('HeatmapLayer error:', err);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [heatmapData, map]);
+
+  // Recenter when a fresh user location arrives
+  useEffect(() => {
+    if (map && userLocation) {
+      const center = new (window as any).google.maps.LatLng(userLocation.lat, userLocation.lng)
+      map.setCenter(center)
+      map.setZoom(14)
+      loadPlaces(userLocation, 5000)
+    }
+  }, [map, userLocation, loadPlaces])
+
+  // Handle search via Places API (New)
+  useEffect(() => {
+    const run = async () => {
+      if (!searchQuery || !map) return
+      try {
+        const fieldMask = [
+          'places.id','places.displayName','places.formattedAddress','places.location','places.types',
+          'places.rating','places.userRatingCount','places.currentOpeningHours.openNow','places.priceLevel','places.photos'
+        ].join(',')
+        const resp = await fetch('https://places.googleapis.com/v1/places:searchText', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Goog-Api-Key': GOOGLE_API_KEY,
+            'X-Goog-FieldMask': fieldMask,
+          },
+          body: JSON.stringify({
+            textQuery: searchQuery,
+            locationBias: userLocation ? { circle: { center: { latitude: userLocation.lat, longitude: userLocation.lng }, radius: 10000 } } : undefined,
+          })
+        })
+        const json = await resp.json()
+        const results = (json.places || []) as any[]
+        if (results.length > 0) {
+          const first = results[0]
+          const lat = first.location?.latitude
+          const lng = first.location?.longitude
+          if (lat && lng) {
+            map.setCenter(new (window as any).google.maps.LatLng(lat, lng))
+            map.setZoom(15)
+            await loadPlaces({ lat, lng }, 2000)
+          }
+        }
+      } catch (e) {
+        console.error('searchText error', e)
+      }
+    }
+    run()
+  }, [searchQuery, map, userLocation, loadPlaces])
+
+  // Defensive render with error boundary
+  if (error) {
+    return <div className="w-full h-full flex items-center justify-center text-red-600 bg-red-50 rounded-2xl">Map error: {error}</div>;
+  }
+  try {
+    return (
+      <div className="w-full h-full relative">
+        <div ref={mapRef} className="w-full h-full rounded-2xl"></div>
+        {/* Locate me control (non-intrusive overlay, parent handles actual permission) */}
+        <div className="absolute bottom-3 left-3">
+          <div className="bg-background/95 backdrop-blur-sm rounded-lg shadow-md border border-border px-2 py-1 text-xs flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-green-500" />
+            <span>Location-ready</span>
+          </div>
+        </div>
+        {isLoading && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/20 rounded-2xl">
+            <Loader2 className="h-6 w-6 animate-spin text-white" />
+          </div>
+        )}
+      </div>
+    );
+  } catch (err: any) {
+    setError(err?.message || 'Unknown error');
+    return <div className="w-full h-full flex items-center justify-center text-red-600 bg-red-50 rounded-2xl">Map crashed: {err?.message || 'Unknown error'}</div>;
+  }
+}
+
+export default function TouristSpotsPage() {
+  const router = useRouter()
+  const [searchQuery, setSearchQuery] = useState("")
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null)
+  const [locationError, setLocationError] = useState<string>("")
+  const [places, setPlaces] = useState<any[]>([])
+  const [filteredPlaces, setFilteredPlaces] = useState<any[]>([])
+  const [isLoading, setIsLoading] = useState(false)
+  const [liveStats, setLiveStats] = useState({
+    visitors: 1247,
+    trending: 8,
+    activeNow: 342,
+  })
+  const [preferences, setPreferences] = useState<any>(null)
+  const [nearestPlaces, setNearestPlaces] = useState<any[]>([])
+  const [searchSuggestions, setSearchSuggestions] = useState<any[]>([])
+  const [showSuggestions, setShowSuggestions] = useState(false)
+  const [isLocationLoading, setIsLocationLoading] = useState(false)
+  const [locationWatchId, setLocationWatchId] = useState<number | null>(null)
+  const [locationAccuracy, setLocationAccuracy] = useState<number | null>(null)
+  const [lastLocationUpdate, setLastLocationUpdate] = useState<Date | null>(null)
+  const [locationRetryCount, setLocationRetryCount] = useState(0)
+  const [locationRetryAttempts, setLocationRetryAttempts] = useState<string[]>([])
+  const [locationPermissionStatus, setLocationPermissionStatus] = useState<'unknown' | 'granted' | 'denied' | 'prompt'>('unknown')
+
+  // Check location permission status
+  const checkLocationPermission = useCallback(async () => {
+    if ('permissions' in navigator) {
+      try {
+        const permission = await navigator.permissions.query({ name: 'geolocation' as PermissionName })
+        setLocationPermissionStatus(permission.state)
+        
+        permission.onchange = () => {
+          setLocationPermissionStatus(permission.state)
+        }
+      } catch (error) {
+        console.log('Permission API not supported')
+      }
+    }
+  }, [])
+
+  // Enhanced location handling using LocationService
+  useEffect(() => {
+    // Check permissions first
+    checkLocationPermission()
+    
+    const initializeLocation = async () => {
+      setIsLocationLoading(true)
+      setLocationRetryCount(0)
+      setLocationRetryAttempts([])
+
+      try {
+        const coords = await LocationService.getCurrentLocation({
+          onProgress: (attempt, strategy) => {
+            setLocationRetryCount(attempt)
+            setLocationRetryAttempts(prev => [...prev, strategy.description])
+          },
+          onSuccess: (coords) => {
+            setLocationError("")
+            setUserLocation(coords)
+            setLocationAccuracy(coords.accuracy || null)
+            setLastLocationUpdate(coords.timestamp || new Date())
+            setIsLocationLoading(false)
+            setLocationRetryCount(0)
+            setLocationRetryAttempts([])
+            
+            // Start live location tracking
+            startLiveLocationTracking()
+          },
+          onError: (error, finalAttempt) => {
+            if (finalAttempt) {
+              setLocationError(LocationService.getErrorMessage(error))
+            }
+            setIsLocationLoading(false)
+          }
+        })
+
+        if (coords) {
+          setUserLocation(coords)
+          setLocationAccuracy(coords.accuracy || null)
+          setLastLocationUpdate(coords.timestamp || new Date())
+          startLiveLocationTracking()
+        }
+      } catch (error) {
+        console.error('Location initialization error:', error)
+        setLocationError('Failed to initialize location service.')
+        setIsLocationLoading(false)
+      }
+    }
+
+    initializeLocation()
+  }, [])
+
+  // Start live location tracking using LocationService
+  const startLiveLocationTracking = useCallback(() => {
+    if (locationWatchId) {
+      navigator.geolocation.clearWatch(locationWatchId)
+    }
+
+    const watchId = LocationService.watchLocation(
+      (coords) => {
+        setUserLocation(coords)
+        setLocationAccuracy(coords.accuracy || null)
+        setLastLocationUpdate(coords.timestamp || new Date())
+        setLocationError("")
+      },
+      (error) => {
+        console.error('Live location tracking error:', error)
+        setLocationError('Live location tracking failed')
+      }
+    )
+
+    setLocationWatchId(watchId)
+  }, [locationWatchId])
+
+  // Cleanup location tracking on unmount
+  useEffect(() => {
+    return () => {
+      if (locationWatchId) {
+        navigator.geolocation.clearWatch(locationWatchId)
+      }
+    }
+  }, [locationWatchId])
+
+  const requestLocation = useCallback(async () => {
+    setIsLocationLoading(true)
+    setLocationRetryCount(0)
+    setLocationRetryAttempts([])
+
+    try {
+      const coords = await LocationService.getCurrentLocation({
+      onProgress: (attempt, strategy) => {
+        setLocationRetryCount(attempt)
+        setLocationRetryAttempts(prev => [...prev, strategy.description])
+      },
+      onSuccess: (coords) => {
+        setLocationError("")
+        setUserLocation(coords)
+        setLocationAccuracy(coords.accuracy || null)
+        setLastLocationUpdate(coords.timestamp || new Date())
+        setIsLocationLoading(false)
+        setLocationRetryCount(0)
+        setLocationRetryAttempts([])
+        
+        // Start live location tracking
+        startLiveLocationTracking()
+      },
+      onError: (error, finalAttempt) => {
+        if (finalAttempt) {
+          setLocationError(LocationService.getErrorMessage(error))
+        }
+        setIsLocationLoading(false)
+      }
+    })
+
+    if (coords) {
+      setUserLocation(coords)
+      setLocationAccuracy(coords.accuracy || null)
+      setLastLocationUpdate(coords.timestamp || new Date())
+      startLiveLocationTracking()
+    }
+  } catch (error) {
+    console.error('Manual location request error:', error)
+    setLocationError('Failed to get location. Please try again.')
+    setIsLocationLoading(false)
+  }
+  }, [startLiveLocationTracking])
+
+  // Share live location
+  const shareLiveLocation = useCallback(async () => {
+    if (!userLocation) {
+      alert('Location not available. Please enable location access.')
+      return
+    }
+
+    const locationUrl = `https://www.google.com/maps?q=${userLocation.lat},${userLocation.lng}`
+    const locationText = `📍 My current location: ${locationUrl}\n\nLatitude: ${userLocation.lat.toFixed(6)}\nLongitude: ${userLocation.lng.toFixed(6)}\n\nShared from Karnataka Tourism App`
+
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: 'My Live Location',
+          text: locationText,
+          url: locationUrl
+        })
+      } else {
+        await navigator.clipboard.writeText(locationText)
+        alert('Location copied to clipboard!')
+      }
+    } catch (error) {
+      console.error('Error sharing location:', error)
+      // Fallback to clipboard
+      try {
+        await navigator.clipboard.writeText(locationText)
+        alert('Location copied to clipboard!')
+      } catch (clipboardError) {
+        alert('Unable to share location. Please try again.')
+      }
+    }
+  }, [userLocation])
+
+  // Get location address using reverse geocoding
+  const getLocationAddress = useCallback(async (lat: number, lng: number) => {
+    try {
+      const response = await fetch(
+        `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_API_KEY}`
+      )
+      const data = await response.json()
+      
+      if (data.results && data.results.length > 0) {
+        return data.results[0].formatted_address
+      }
+    } catch (error) {
+      console.error('Reverse geocoding error:', error)
+    }
+    return null
+  }, [])
+
+  useEffect(() => {
+    const statsInterval = setInterval(() => {
+      setLiveStats((prev) => ({
+        visitors: prev.visitors + Math.floor(Math.random() * 10) - 5,
+        trending: prev.trending + Math.floor(Math.random() * 3) - 1,
+        activeNow: prev.activeNow + Math.floor(Math.random() * 20) - 10,
+      }))
+    }, 3000)
+
+    return () => clearInterval(statsInterval)
+  }, [])
+
+  useEffect(() => {
+    const loadPrefs = async () => {
+      if (typeof window !== 'undefined') {
+        const username = localStorage.getItem("username") || "guest"
+        try {
+          const res = await fetch(`/api/preferences?username=${encodeURIComponent(username)}`, { cache: "no-store" })
+          const data = await res.json()
+          setPreferences(data?.preferences || null)
+        } catch {}
+      }
+    }
+    loadPrefs()
+  }, [])
+
+  // Handle search with debouncing
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setFilteredPlaces(places)
+      setShowSuggestions(false)
+      return
+    }
+
+    const timeoutId = setTimeout(() => {
+      const filtered = places.filter(place =>
+        place.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        place.vicinity.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        place.types?.some((type: string) => type.toLowerCase().includes(searchQuery.toLowerCase()))
+      )
+      setFilteredPlaces(filtered)
+      setShowSuggestions(false)
+    }, 300)
+
+    return () => clearTimeout(timeoutId)
+  }, [searchQuery, places])
+
+  // Load nearest places with Places API v1
+  useEffect(() => {
+    const run = async () => {
+      if (!userLocation) return
+      try {
+        const body = {
+          includedTypes: ['tourist_attraction'],
+          maxResultCount: 10,
+          locationRestriction: {
+            circle: {
+              center: { latitude: userLocation.lat, longitude: userLocation.lng },
+              radius: 5000
+            }
+          }
+        }
+        const fieldMask = [
+          'places.id','places.displayName','places.formattedAddress','places.location','places.types',
+          'places.rating','places.userRatingCount','places.currentOpeningHours.openNow','places.photos'
+        ].join(',')
+        const resp = await fetch('https://places.googleapis.com/v1/places:searchNearby', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Goog-Api-Key': GOOGLE_API_KEY,
+            'X-Goog-FieldMask': fieldMask,
+          },
+          body: JSON.stringify(body)
+        })
+        const json = await resp.json()
+        const placesResp = (json.places || []) as any[]
+        const normalize = (p: any) => ({
+          place_id: p.id,
+          name: p.displayName?.text || '',
+          vicinity: p.formattedAddress || '',
+          rating: p.rating || 0,
+          user_ratings_total: p.userRatingCount || 0,
+          types: p.types || [],
+          opening_hours: { open_now: p.currentOpeningHours?.openNow ?? undefined },
+          geometry: { location: { lat: p.location?.latitude, lng: p.location?.longitude } },
+          photos: (p.photos || []).map((ph: any) => ({
+            name: ph.name,
+            getUrl: ({ maxWidth, maxHeight }: any) => `https://places.googleapis.com/v1/${ph.name}/media?key=${GOOGLE_API_KEY}${maxWidth ? `&maxWidthPx=${maxWidth}` : ''}${maxHeight ? `&maxHeightPx=${maxHeight}` : ''}`
+          }))
+        })
+        setNearestPlaces(placesResp.map(normalize).slice(0, 3))
+      } catch (e) {
+        console.error('nearest load error', e)
+      }
+    }
+    run()
+  }, [userLocation])
+
+  const handlePlacesUpdate = (newPlaces: any[]) => {
+    setPlaces(newPlaces)
+    setFilteredPlaces(newPlaces)
+  }
+
+  const getPlacePhoto = (place: any) => {
+    if (place.photos && place.photos.length > 0) {
+      return place.photos[0].getUrl({ maxWidth: 400, maxHeight: 300 })
+    }
+    return "/placeholder.svg"
+  }
+
+  const getSafetyScore = (place: any) => {
+    const rating = place.rating || 0
+    const userRatingsTotal = place.user_ratings_total || 0
+    
+    if (rating >= 4.5 && userRatingsTotal >= 1000) return { score: 9.2, level: "Very Safe", color: "text-green-500" }
+    if (rating >= 4.0 && userRatingsTotal >= 500) return { score: 8.5, level: "Safe", color: "text-green-500" }
+    if (rating >= 3.5 && userRatingsTotal >= 100) return { score: 7.5, level: "Moderate", color: "text-yellow-500" }
+    if (rating >= 3.0) return { score: 6.5, level: "Caution", color: "text-orange-500" }
+    return { score: 5.0, level: "Unknown", color: "text-gray-500" }
+  }
+
+  const categories = [
+    { icon: Hotel, label: "Stays", color: "from-blue-400 to-blue-600", href: "/stays" },
+    { icon: UtensilsCrossed, label: "Restaurants", color: "from-green-400 to-green-600" },
+    { icon: Coffee, label: "Cafes", color: "from-amber-400 to-amber-600" },
+    { icon: Calendar, label: "Events", color: "from-pink-400 to-pink-600" },
+    { icon: Activity, label: "Activities", color: "from-orange-400 to-orange-600" },
+    { icon: Compass, label: "Explore", color: "from-indigo-400 to-indigo-600", href: "/explore" },
+  ]
+
+  const safetyHazards = [
+    {
+      name: "Jog Falls Trek Path",
+      image: "/dynamic-safety-hazard-rain.jpg",
+      reason: "Slippery rocks during monsoon",
+      severity: "high",
+      condition: "Heavy Rain",
+    },
+    {
+      name: "Coorg Night Safari",
+      image: "/dynamic-safety-hazard-dark.jpg",
+      reason: "Wild animal encounters reported",
+      severity: "medium",
+      condition: "After Dark",
+    },
+    {
+      name: "Hampi Cliff Areas",
+      image: "/dynamic-safety-hazard-theft.jpg",
+      reason: "Theft reports in isolated areas",
+      severity: "high",
+      condition: "Isolated Areas",
+    },
+    {
+      name: "Landslide Zone",
+      image: "/dynamic-safety-hazard-landslide.jpg",
+      reason: "Recent landslide activity",
+      severity: "high",
+      condition: "Monsoon Season",
+    },
+  ]
+
+  const SpotCard = ({ spot }: { spot: any }) => {
+    const safety = getSafetyScore(spot)
+    const photo = getPlacePhoto(spot)
+    
+    return (
+      <Card
+        className="placard-3d flex-shrink-0 w-52 rounded-3xl overflow-hidden shadow-md cursor-pointer bg-card border border-border"
+        onClick={() => router.push(`/hotel/${encodeURIComponent(spot.name)}`)}
+      >
+        <div className="relative">
+          <img src={photo} alt={spot.name} className="w-full h-32 object-cover" />
+          <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
+          <div className="absolute top-2 right-2">
+            <LikeButton
+              placeId={spot.place_id || spot.name.toLowerCase().replace(/\s+/g, "-")}
+              placeName={spot.name}
+              placeData={{
+                name: spot.name,
+                location: spot.vicinity || "Karnataka, India",
+                image: photo,
+                rating: spot.rating?.toString() || "N/A",
+                timing: spot.opening_hours?.open_now ? "Open Now" : "Check Hours",
+                entry: spot.price_level ? "₹" + (spot.price_level * 200) : "Free",
+                description: spot.types?.[0]?.replace(/_/g, ' ') || "Tourist Attraction",
+              }}
+              size="sm"
+              className="shadow-lg"
+            />
+          </div>
+          <div className="absolute top-2 left-2">
+            <div className="bg-white/95 backdrop-blur-sm rounded-full px-2 py-1 flex items-center gap-1 shadow-md">
+              <div
+                className={`w-2 h-2 rounded-full ${
+                  safety.color === "text-green-500" ? "bg-green-500" : 
+                  safety.color === "text-yellow-500" ? "bg-yellow-500" : 
+                  safety.color === "text-orange-500" ? "bg-orange-500" : "bg-gray-500"
+                }`}
+              ></div>
+              <span className="text-xs font-medium text-gray-800">{safety.score}</span>
+            </div>
+          </div>
+          <div className="absolute bottom-2 left-2 right-2 text-white">
+            <div className="space-y-1">
+              <div className="flex justify-between items-start">
+                <div className="flex-1">
+                  <p className="text-xs opacity-90">
+                    {spot.opening_hours?.open_now ? "Open Now" : "Check Hours"}
+                  </p>
+                  <p className="text-xs opacity-90">
+                    {spot.price_level ? "₹" + (spot.price_level * 200) : "Free"}
+                  </p>
+                  <p className={`text-xs font-medium ${safety.color}`}>
+                    Safety: {safety.level}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1">
+                  <Star className="h-3 w-3 text-yellow-400 fill-current" />
+                  <span className="text-xs">{spot.rating?.toFixed(1) || "N/A"}</span>
+                </div>
+              </div>
+              <p className="text-xs opacity-75 italic">
+                {spot.types?.[0]?.replace(/_/g, ' ') || "Tourist Attraction"}
+              </p>
+            </div>
+          </div>
+        </div>
+        <div className="p-4">
+          <h3 className="text-sm font-semibold text-card-foreground text-center truncate">{spot.name}</h3>
+          <p className="text-xs text-muted-foreground text-center mt-1 truncate">{spot.vicinity}</p>
+        </div>
+      </Card>
+    )
+  }
+
+  const SafetyHazardCard = ({ hazard }: { hazard: any }) => (
+    <Card className="placard-3d flex-shrink-0 w-48 rounded-3xl overflow-hidden shadow-md bg-card border border-destructive/20">
+      <div className="relative">
+        <img src={hazard.image || "/placeholder.svg"} alt={hazard.name} className="w-full h-28 object-cover" />
+        <div className="absolute inset-0 bg-gradient-to-t from-red-900/80 via-red-900/20 to-transparent" />
+        <div className="absolute top-2 right-2">
+          <div
+            className={`px-2 py-1 rounded-full text-xs font-medium ${
+              hazard.severity === "high" ? "bg-red-500 text-white" : "bg-amber-500 text-white"
+            }`}
+          >
+            {hazard.condition}
+          </div>
+        </div>
+        <div className="absolute bottom-2 left-2 right-2 text-white">
+          <div className="flex items-center gap-1 mb-1">
+            <AlertCircle className={`h-3 w-3 ${hazard.severity === "high" ? "text-red-400" : "text-amber-400"}`} />
+            <span className="text-xs font-medium">{hazard.severity.toUpperCase()} RISK</span>
+          </div>
+        </div>
+      </div>
+      <div className="p-3">
+        <h3 className="text-sm font-medium text-card-foreground mb-1">{hazard.name}</h3>
+        <p className="text-xs text-muted-foreground">{hazard.reason}</p>
+      </div>
+    </Card>
+  )
+
+  const handleCategoryClick = (category: any) => {
+    if (category.href) {
+      router.push(category.href)
+    }
+  }
+
+  const handleMapClick = () => {
+    router.push("/explore")
+  }
+
+  return (
+    <div className="min-h-screen bg-background flex flex-col">
+      <div className="flex items-center justify-between p-4 pt-6">
+        <h1 className="text-xl font-semibold text-foreground">Tourist Spots</h1>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="text-primary-foreground bg-primary rounded-xl hover:bg-primary/90 shadow-lg h-10 w-10"
+            onClick={() => router.push("/geofencing-alerts")}
+          >
+            <AlertTriangle className="h-5 w-5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="text-primary-foreground bg-primary rounded-xl hover:bg-primary/90 shadow-lg h-10 w-10"
+            onClick={() => router.push("/saved-places")}
+          >
+            <Bookmark className="h-5 w-5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="text-primary-foreground bg-blue-500 rounded-xl hover:bg-blue-600 shadow-lg h-10 w-10"
+            onClick={() => router.push("/sos")}
+          >
+            <Shield className="h-5 w-5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="text-foreground bg-card rounded-xl hover:bg-muted border border-border h-10 w-10"
+          >
+            <Menu className="h-5 w-5" />
+          </Button>
+        </div>
+      </div>
+
+      {/* Location Status and Controls */}
+      <div className="px-4 pb-4">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            {/* Location Status */}
+            <div className="flex items-center gap-2">
+              <div className={`w-3 h-3 rounded-full ${
+                userLocation && !locationError ? 'bg-green-500 animate-pulse' : 
+                isLocationLoading ? 'bg-yellow-500 animate-pulse' : 'bg-red-500'
+              }`}></div>
+              <span className="text-sm text-muted-foreground">
+                {userLocation && !locationError ? 'Live Location Active' : 
+                 isLocationLoading ? 'Getting Location...' : 'Location Unavailable'}
+              </span>
+              {locationPermissionStatus === 'denied' && (
+                <span className="text-xs text-red-500 ml-2">(Permission Denied)</span>
+              )}
+              {locationPermissionStatus === 'granted' && !userLocation && (
+                <span className="text-xs text-blue-500 ml-2">(Permission Granted)</span>
+              )}
+            </div>
+            
+            {/* Location Details */}
+            {userLocation && (
+              <div className="text-xs text-muted-foreground">
+                <span>{userLocation.lat.toFixed(4)}, {userLocation.lng.toFixed(4)}</span>
+                {locationAccuracy && (
+                  <span className="ml-2">±{Math.round(locationAccuracy)}m</span>
+                )}
+              </div>
+            )}
+          </div>
+          
+          {/* Location Controls */}
+          <div className="flex items-center gap-2">
+            {userLocation && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={shareLiveLocation}
+                className="text-xs bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+              >
+                <MapPin className="h-3 w-3 mr-1" />
+                Share Location
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={requestLocation}
+              disabled={isLocationLoading}
+              className="text-xs"
+            >
+              {isLocationLoading ? (
+                <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+              ) : (
+                <LocateFixed className="h-3 w-3 mr-1" />
+              )}
+              {isLocationLoading ? 'Getting...' : 'Refresh'}
+            </Button>
+          </div>
+        </div>
+        
+        {/* Location Status Display */}
+        {isLocationLoading && locationRetryAttempts.length > 0 && (
+          <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+            <div className="flex items-center gap-2 mb-2">
+              <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />
+              <span className="text-sm text-blue-700">Getting your location...</span>
+            </div>
+            <div className="text-xs text-blue-600">
+              <div>Attempt {locationRetryCount + 1} of 4</div>
+              <div className="mt-1">
+                {locationRetryAttempts[locationRetryAttempts.length - 1]}
+              </div>
+            </div>
+          </div>
+        )}
+        
+        {/* Location Error Display */}
+        {locationError && !isLocationLoading && (
+          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="h-4 w-4 text-red-500" />
+              <span className="text-sm text-red-700">{locationError}</span>
+            </div>
+            {locationRetryCount > 0 && (
+              <div className="mt-2 text-xs text-red-600">
+                Tried {locationRetryCount} different location methods. 
+                <Button 
+                  variant="link" 
+                  size="sm" 
+                  onClick={requestLocation}
+                  className="text-xs p-0 h-auto text-red-600 hover:text-red-800"
+                >
+                  Try again
+                </Button>
+              </div>
+            )}
+            {locationPermissionStatus === 'denied' && (
+              <div className="mt-2 text-xs text-red-600">
+                <strong>To fix this:</strong>
+                <ol className="list-decimal list-inside mt-1 space-y-1">
+                  <li>Click the location icon in your browser's address bar</li>
+                  <li>Select "Allow" for location access</li>
+                  <li>Refresh this page</li>
+                </ol>
+              </div>
+            )}
+          </div>
+        )}
+        
+        {/* Location Success Display */}
+        {userLocation && !locationError && !isLocationLoading && (
+          <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg">
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+              <span className="text-sm text-green-700">Location successfully obtained</span>
+            </div>
+            {locationAccuracy && (
+              <div className="mt-1 text-xs text-green-600">
+                Accuracy: ±{Math.round(locationAccuracy)}m
+              </div>
+            )}
+          </div>
+        )}
+        
+        {/* Last Update Info */}
+        {lastLocationUpdate && (
+          <div className="mb-4 text-xs text-muted-foreground">
+            Last updated: {lastLocationUpdate.toLocaleTimeString()}
+          </div>
+        )}
+      </div>
+
+      <div className="px-4 pb-4">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-5 w-5" />
+          <Input
+            placeholder="Search tourist spots, restaurants, hotels..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-10 pr-10 bg-input border border-border rounded-full h-12 text-foreground placeholder:text-muted-foreground"
+          />
+          {searchQuery && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setSearchQuery("")}
+              className="absolute right-2 top-1/2 transform -translate-y-1/2 h-8 w-8 text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div className="flex-1 px-4 pb-20">
+        <Card className="placard-3d rounded-2xl overflow-hidden shadow-lg mb-4 h-48 relative cursor-pointer bg-card border border-border">
+          <GoogleMap 
+            searchQuery={searchQuery}
+            userLocation={userLocation}
+            onPlacesUpdate={handlePlacesUpdate}
+          />
+          <div className="absolute top-4 left-4 bg-background/95 backdrop-blur-sm rounded-lg px-3 py-2 shadow-md border border-border">
+            <div className="flex items-center gap-2">
+              <MapPin className="h-4 w-4 text-primary" />
+              <div>
+                <p className="text-sm font-medium text-foreground">Live Tourist Map</p>
+                <p className="text-xs text-muted-foreground">
+                  {userLocation ? "Your location" : "Bangalore, India"}
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="absolute bottom-4 right-4">
+            <Button
+              onClick={requestLocation}
+              size="icon"
+              className="h-10 w-10 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 shadow-lg"
+              title="Use my location"
+            >
+              <LocateFixed className="h-5 w-5" />
+            </Button>
+          </div>
+          {locationError && (
+            <div className="absolute bottom-4 left-4 bg-destructive/90 text-destructive-foreground text-xs px-3 py-2 rounded-md shadow">
+              {locationError}
+            </div>
+          )}
+          <div className="absolute top-4 right-4 bg-background/95 backdrop-blur-sm rounded-lg px-3 py-2 shadow-md border border-border">
+            <div className="flex items-center gap-2 text-xs">
+              <div className="flex items-center gap-1">
+                <div className="w-2 h-2 rounded-full bg-red-500"></div>
+                <span>Popular</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <div className="w-2 h-2 rounded-full bg-yellow-500"></div>
+                <span>Lesser Known</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <div className="w-2 h-2 rounded-full bg-blue-500"></div>
+                <span>Other</span>
+              </div>
+            </div>
+          </div>
+        </Card>
+
+        <div className="mb-6">
+          <Button
+            onClick={() => router.push("/wishlist")}
+            className="w-full p-4 bg-gradient-to-r from-accent to-primary text-accent-foreground rounded-2xl hover:from-accent/90 hover:to-primary/90 transition-all duration-300 shadow-lg"
+          >
+            <div className="flex items-center justify-center gap-2">
+              <Zap className="h-5 w-5" />
+              <span className="font-medium">Discover Your Wishlist</span>
+            </div>
+          </Button>
+        </div>
+
+        <div className="grid grid-cols-3 gap-3 mb-6">
+          <Card className="placard-3d p-3 text-center bg-card border border-border rounded-2xl">
+            <div className="flex items-center justify-center gap-1 mb-1">
+              <Users className="h-4 w-4 text-primary" />
+              <span className="text-lg font-bold text-card-foreground">{liveStats.visitors}</span>
+            </div>
+            <p className="text-xs text-muted-foreground">Live Visitors</p>
+          </Card>
+          <Card className="placard-3d p-3 text-center bg-card border border-border rounded-2xl">
+            <div className="flex items-center justify-center gap-1 mb-1">
+              <TrendingUp className="h-4 w-4 text-accent" />
+              <span className="text-lg font-bold text-card-foreground">{liveStats.trending}</span>
+            </div>
+            <p className="text-xs text-muted-foreground">Trending Now</p>
+          </Card>
+          <Card className="placard-3d p-3 text-center bg-card border border-border rounded-2xl">
+            <div className="flex items-center justify-center gap-1 mb-1">
+              <Eye className="h-4 w-4 text-secondary" />
+              <span className="text-lg font-bold text-card-foreground">{liveStats.activeNow}</span>
+            </div>
+            <p className="text-xs text-muted-foreground">Active Now</p>
+          </Card>
+        </div>
+
+        <div className="grid grid-cols-4 gap-3 mb-8">
+          {categories.map((category) => (
+            <Card
+              key={category.label}
+              onClick={() => handleCategoryClick(category)}
+              className={`placard-3d relative p-4 h-28 flex flex-col items-center justify-center cursor-pointer text-white border-0 rounded-2xl shadow-lg bg-gradient-to-br ${category.color}`}
+            >
+              <category.icon className="h-10 w-10 mb-2" />
+              <span className="text-xs font-medium text-center leading-tight">{category.label}</span>
+            </Card>
+          ))}
+        </div>
+
+        <div className="mb-6">
+          <h2 className="text-lg font-semibold text-destructive mb-4 flex items-center gap-2">
+            <AlertTriangle className="h-5 w-5" />
+            Places to Skip Due to Safety Hazards
+          </h2>
+          <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide">
+            {safetyHazards.map((hazard, index) => (
+              <SafetyHazardCard key={index} hazard={hazard} />
+            ))}
+          </div>
+        </div>
+
+        {searchQuery && (
+          <div className="mb-6">
+            <h2 className="text-lg font-semibold text-foreground mb-4">
+              Search Results ({filteredPlaces.length})
+            </h2>
+            <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide">
+              {filteredPlaces.length > 0 ? (
+                filteredPlaces.map((spot, index) => (
+                  <SpotCard key={spot.place_id || index} spot={spot} />
+                ))
+              ) : (
+                <div className="flex items-center justify-center w-full h-32 text-muted-foreground">
+                  <p>No places found for "{searchQuery}"</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {!searchQuery && (
+          <>
+            <div className="mb-6">
+              <h2 className="text-lg font-semibold text-foreground mb-4">Nearest to You</h2>
+              <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide">
+                {nearestPlaces.length > 0 ? (
+                  nearestPlaces.map((spot, index) => (
+                    <SpotCard key={spot.place_id || index} spot={spot} />
+                  ))
+                ) : (
+                  <div className="flex items-center justify-center w-full h-32 text-muted-foreground">
+                    <p>Loading nearby places...</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="mb-6">
+              <h2 className="text-lg font-semibold text-foreground mb-4">Popular Tourist Spots</h2>
+              <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide">
+                {places
+                  .filter(place => place.rating >= 4.5 && place.user_ratings_total >= 1000)
+                  .slice(0, 5)
+                  .map((spot, index) => (
+                    <SpotCard key={spot.place_id || index} spot={spot} />
+                  ))}
+              </div>
+            </div>
+
+            <div className="mb-6">
+              <h2 className="text-lg font-semibold text-foreground mb-4">Restaurants & Cafes</h2>
+              <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide">
+                {places
+                  .filter(place => place.types?.includes('restaurant') || place.types?.includes('cafe'))
+                  .slice(0, 5)
+                  .map((spot, index) => (
+                    <SpotCard key={spot.place_id || index} spot={spot} />
+                  ))}
+              </div>
+            </div>
+
+            <div className="mb-6">
+              <h2 className="text-lg font-semibold text-foreground mb-4">Hotels & Stays</h2>
+              <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide">
+                {places
+                  .filter(place => place.types?.includes('lodging'))
+                  .slice(0, 5)
+                  .map((spot, index) => (
+                    <SpotCard key={spot.place_id || index} spot={spot} />
+                  ))}
+              </div>
+            </div>
+
+            <div className="mb-6">
+              <h2 className="text-lg font-semibold text-foreground mb-4">Activities & Events</h2>
+              <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide">
+                {places
+                  .filter(place => 
+                    place.types?.includes('amusement_park') || 
+                    place.types?.includes('museum') || 
+                    place.types?.includes('park')
+                  )
+                  .slice(0, 5)
+                  .map((spot, index) => (
+                    <SpotCard key={spot.place_id || index} spot={spot} />
+                  ))}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      <BottomNavigation />
+    </div>
+  )
+}
+
