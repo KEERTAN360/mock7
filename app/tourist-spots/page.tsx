@@ -307,7 +307,7 @@ import {
   const getLocationAddress = useCallback(async (lat: number, lng: number) => {
     try {
       const response = await fetch(
-  `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${process.env.GOOGLE_MAPS_API_KEY}`
+  `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}`
       )
       const data = await response.json()
       
@@ -390,7 +390,7 @@ import {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'X-Goog-Api-Key': process.env.GOOGLE_MAPS_API_KEY ?? '',
+            'X-Goog-Api-Key': process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? '',
             'X-Goog-FieldMask': fieldMask,
           } as HeadersInit,
           body: JSON.stringify(body)
@@ -408,7 +408,7 @@ import {
           geometry: { location: { lat: p.location?.latitude, lng: p.location?.longitude } },
           photos: (p.photos || []).map((ph: any) => ({
             name: ph.name,
-            getUrl: ({ maxWidth, maxHeight }: any) => `https://places.googleapis.com/v1/${ph.name}/media?key=${process.env.GOOGLE_MAPS_API_KEY}${maxWidth ? `&maxWidthPx=${maxWidth}` : ''}${maxHeight ? `&maxHeightPx=${maxHeight}` : ''}`
+            getUrl: ({ maxWidth, maxHeight }: any) => `https://places.googleapis.com/v1/${ph.name}/media?key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}${maxWidth ? `&maxWidthPx=${maxWidth}` : ''}${maxHeight ? `&maxHeightPx=${maxHeight}` : ''}`
           }))
         })
         setNearestPlaces(placesResp.map(normalize).slice(0, 3))
